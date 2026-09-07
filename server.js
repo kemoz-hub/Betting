@@ -8,6 +8,7 @@ const API_KEY = process.env.API_FOOTBALL_KEY;
 const API_BASE = "https://v3.football.api-sports.io";
 
 app.use(express.json());
+app.use(express.static(__dirname));
 
 const cache = new Map();
 const CACHE_MS = 5 * 60 * 1000;
@@ -549,7 +550,6 @@ app.use((req, res) => {
   res.sendFile(
     path.join(
       __dirname,
-      "public",
       "index.html"
     )
   );
