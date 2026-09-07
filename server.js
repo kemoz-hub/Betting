@@ -2,6 +2,7 @@ const express = require("express");
 const path = require("path");
 
 const app = express();
+
 const PORT = process.env.PORT || 3000;
 const API_KEY = process.env.API_FOOTBALL_KEY;
 const API_BASE = "https://v3.football.api-sports.io";
@@ -12,146 +13,562 @@ app.use(express.static(path.join(__dirname, "public")));
 const cache = new Map();
 const CACHE_MS = 5 * 60 * 1000;
 
-async function api(pathname, params = {}) {
-  if (!API_KEY) throw new Error("API_FOOTBALL_KEY is not configured.");
-  const qs = new URLSearchParams(params);
-  const url = `${API_BASE}${pathname}?${qs.toString()}`;
-  const key = url;
-  const now = Date.now();
-  const hit = cache.get(key);
-  if (hit && now - hit.time < CACHE_MS) return hit.data;
+// ===============================
+// API-FOOTBALL REQUEST
+// ===============================
 
-  const r = await fetch(url, { headers: { "x-apisports-key": API_KEY } });
-  if (!r.ok) throw new Error(`API request failed: ${r.status}`);
-  const data = await r.json();
-  if (data.errors && Object.keys(data.errors).length) {
+async function api(endpoint, params = {}) {
+  if (!API_KEY) {
+    throw new Error("API_FOOTBALL_KEY is not configured.");
+  }
+
+  const query = new URLSearchParams(params);
+  const url = `${API_BASE}${endpoint}?${query.toString()}`;
+
+  const now = Date.now();
+  const cached = cache.get(url);
+
+  if (cached && now - cached.time < CACHE_MS) {
+    return cached.data;
+  }
+
+  const response = await fetch(url, {
+    headers: {
+      "x-apisports-key": API_KEY
+    }
+  });
+
+  if (!response.ok) {
+    throw new Error(`API request failed: ${response.status}`);
+  }
+
+  const data = await response.json();
+
+  if (data.errors && Object.keys(data.errors).length > 0) {
     throw new Error(Object.values(data.errors).join(", "));
   }
-  cache.set(key, { time: now, data });
+
+  cache.set(url, {
+    time: now,
+    data
+  });
+
   return data;
 }
 
+// ===============================
+// POISSON MODEL
+// ===============================
+
 function poisson(k, lambda) {
-  if (lambda <= 0) return k === 0 ? 1 : 0;
-  let fact = 1;
-  for (let i = 2; i <= k; i++) fact *= i;
-  return Math.exp(-lambda) * Math.pow(lambda, k) / fact;
+  if (lambda <= 0) {
+    return k === 0 ? 1 : 0;
+  }
+
+  let factorial = 1;
+
+  for (let i = 2; i <= k; i++) {
+    factorial *= i;
+  }
+
+  return (
+    Math.exp(-lambda) *
+    Math.pow(lambda, k) /
+    factorial
+  );
 }
 
-function modelFromApiPrediction(pred) {
-  const p = pred?.response?.[0];
-  if (!p) return null;
-  const pct = p.predictions?.percent || {};
-  const home = Number(String(pct.home || "0").replace("%",""));
-  const draw = Number(String(pct.draw || "0").replace("%",""));
-  const away = Number(String(pct.away || "0").replace("%",""));
-  const advice = p.predictions?.advice || "No advice available";
-  const winner = p.predictions?.winner?.name || "No clear winner";
-  const underOver = p.predictions?.under_over || "";
-  const goals = p.predictions?.goals || {};
-  const hg = Number(goals.home) || 1.35;
-  const ag = Number(goals.away) || 1.10;
-  return { home, draw, away, advice, winner, underOver, hg, ag };
-}
-
-function poissonModel(hg, ag) {
+function poissonModel(homeGoals, awayGoals) {
   const matrix = [];
-  let home = 0, draw = 0, away = 0, over25 = 0, btts = 0;
+
+  let home = 0;
+  let draw = 0;
+  let away = 0;
+  let over15 = 0;
+  let over25 = 0;
+  let over35 = 0;
+  let over45 = 0;
+  let btts = 0;
+
   for (let h = 0; h <= 7; h++) {
     for (let a = 0; a <= 7; a++) {
-      const p = poisson(h,hg) * poisson(a,ag);
-      matrix.push({h,a,p});
-      if (h>a) home += p;
-      else if (h===a) draw += p;
-      else away += p;
-      if (h+a >= 3) over25 += p;
-      if (h>0 && a>0) btts += p;
+
+      const probability =
+        poisson(h, homeGoals) *
+        poisson(a, awayGoals);
+
+      matrix.push({
+        home: h,
+        away: a,
+        probability
+      });
+
+      if (h > a) {
+        home += probability;
+      } else if (h === a) {
+        draw += probability;
+      } else {
+        away += probability;
+      }
+
+      if (h + a >= 2) over15 += probability;
+      if (h + a >= 3) over25 += probability;
+      if (h + a >= 4) over35 += probability;
+      if (h + a >= 5) over45 += probability;
+
+      if (h > 0 && a > 0) {
+        btts += probability;
+      }
     }
   }
-  matrix.sort((x,y)=>y.p-x.p);
+
+  matrix.sort(
+    (a, b) => b.probability - a.probability
+  );
+
   return {
-    home: home*100, draw: draw*100, away: away*100,
-    over25: over25*100, under25: (1-over25)*100,
-    btts: btts*100, noBtts:(1-btts)*100,
-    scores: matrix.slice(0,5).map(x=>({score:`${x.h}-${x.a}`,p:x.p*100}))
+    home: home * 100,
+    draw: draw * 100,
+    away: away * 100,
+
+    over15: over15 * 100,
+    under15: (1 - over15) * 100,
+
+    over25: over25 * 100,
+    under25: (1 - over25) * 100,
+
+    over35: over35 * 100,
+    under35: (1 - over35) * 100,
+
+    over45: over45 * 100,
+    under45: (1 - over45) * 100,
+
+    btts: btts * 100,
+    noBtts: (1 - btts) * 100,
+
+    scores: matrix
+      .slice(0, 5)
+      .map(item => ({
+        score: `${item.home}-${item.away}`,
+        probability: item.probability * 100
+      }))
   };
 }
 
-app.get("/api/status", (_req,res)=>res.json({
-  ok: true, configured: Boolean(API_KEY),
-  cacheMinutes: CACHE_MS/60000
-}));
+// ===============================
+// API-FOOTBALL PREDICTION
+// ===============================
 
-app.get("/api/fixtures", async (req,res)=>{
+function parsePrediction(data) {
+  const prediction = data?.response?.[0];
+
+  if (!prediction) {
+    return null;
+  }
+
+  const percentages =
+    prediction.predictions?.percent || {};
+
+  const goals =
+    prediction.predictions?.goals || {};
+
+  const home =
+    Number(
+      String(percentages.home || "0")
+        .replace("%", "")
+    );
+
+  const draw =
+    Number(
+      String(percentages.draw || "0")
+        .replace("%", "")
+    );
+
+  const away =
+    Number(
+      String(percentages.away || "0")
+        .replace("%", "")
+    );
+
+  const homeGoals =
+    Number(goals.home) || 1.35;
+
+  const awayGoals =
+    Number(goals.away) || 1.10;
+
+  return {
+    home,
+    draw,
+    away,
+
+    winner:
+      prediction.predictions?.winner?.name ||
+      "No clear winner",
+
+    advice:
+      prediction.predictions?.advice ||
+      "No advice available",
+
+    underOver:
+      prediction.predictions?.under_over ||
+      "",
+
+    homeGoals,
+    awayGoals
+  };
+}
+
+// ===============================
+// STATUS
+// ===============================
+
+app.get("/api/status", (req, res) => {
+  res.json({
+    ok: true,
+    configured: Boolean(API_KEY),
+    cacheMinutes: CACHE_MS / 60000
+  });
+});
+
+// ===============================
+// FIXTURES
+// ===============================
+
+app.get("/api/fixtures", async (req, res) => {
+
   try {
-    const { date, from, to, league, season, next } = req.query;
+
+    const {
+      date,
+      from,
+      to,
+      league,
+      season,
+      next
+    } = req.query;
+
     const params = {};
-    if (date) params.date=date;
-    else if (from && to) { params.from=from; params.to=to; }
-    if (league) params.league=league;
-    if (season) params.season=season;
-    if (next) params.next=next;
-    params.timezone = req.query.timezone || "Africa/Nairobi";
-    const data = await api("/fixtures", params);
-    const fixtures = data.response || [];
+
+    if (date) {
+      params.date = date;
+    }
+
+    if (from && to) {
+      params.from = from;
+      params.to = to;
+    }
+
+    if (league) {
+      params.league = league;
+    }
+
+    if (season) {
+      params.season = season;
+    }
+
+    if (next) {
+      params.next = next;
+    }
+
+    params.timezone =
+      req.query.timezone ||
+      "Africa/Nairobi";
+
+    const data =
+      await api("/fixtures", params);
+
+    const fixtures =
+      data.response || [];
+
     const enriched = [];
-    for (const f of fixtures.slice(0, 30)) {
+
+    // Limit requests so the free API plan is not
+    // consumed too quickly.
+
+    for (
+      const fixture of fixtures.slice(0, 20)
+    ) {
+
       let prediction = null;
+
       try {
-        const pd = await api("/predictions", { fixture: f.fixture.id });
-        prediction = modelFromApiPrediction(pd);
-      } catch {}
-      const fallback = poissonModel(prediction?.hg || 1.35, prediction?.ag || 1.10);
+
+        const predictionData =
+          await api("/predictions", {
+            fixture: fixture.fixture.id
+          });
+
+        prediction =
+          parsePrediction(predictionData);
+
+      } catch (error) {
+
+        console.log(
+          "Prediction unavailable:",
+          fixture.fixture.id
+        );
+      }
+
+      const homeGoals =
+        prediction?.homeGoals || 1.35;
+
+      const awayGoals =
+        prediction?.awayGoals || 1.10;
+
+      const model =
+        poissonModel(
+          homeGoals,
+          awayGoals
+        );
+
       enriched.push({
-        id:f.fixture.id,
-        date:f.fixture.date,
-        status:f.fixture.status?.short,
-        league:f.league?.name,
-        country:f.league?.country,
-        leagueLogo:f.league?.logo,
-        home:{id:f.teams?.home?.id,name:f.teams?.home?.name,logo:f.teams?.home?.logo},
-        away:{id:f.teams?.away?.id,name:f.teams?.away?.name,logo:f.teams?.away?.logo},
-        venue:f.fixture.venue?.name,
-        score:f.goals,
-        prediction: prediction ? {...prediction, poisson:fallback} : {winner:"Model estimate",poisson:fallback}
+
+        id: fixture.fixture.id,
+
+        date: fixture.fixture.date,
+
+        status:
+          fixture.fixture.status?.short,
+
+        league:
+          fixture.league?.name,
+
+        country:
+          fixture.league?.country,
+
+        leagueLogo:
+          fixture.league?.logo,
+
+        home: {
+          id: fixture.teams?.home?.id,
+          name: fixture.teams?.home?.name,
+          logo: fixture.teams?.home?.logo
+        },
+
+        away: {
+          id: fixture.teams?.away?.id,
+          name: fixture.teams?.away?.name,
+          logo: fixture.teams?.away?.logo
+        },
+
+        venue:
+          fixture.fixture.venue?.name,
+
+        score:
+          fixture.goals,
+
+        prediction: {
+
+          api: prediction,
+
+          winner:
+            prediction?.winner ||
+            "Model estimate",
+
+          advice:
+            prediction?.advice ||
+            "",
+
+          poisson: model
+
+        }
+
       });
     }
-    res.json({results: enriched, count: enriched.length, source:"API-Football"});
-  } catch(e) { res.status(500).json({error:e.message}); }
-});
 
-app.get("/api/match/:id", async (req,res)=>{
-  try {
-    const id=req.params.id;
-    const [fx,pd,odds] = await Promise.allSettled([
-      api("/fixtures",{id}),
-      api("/predictions",{fixture:id}),
-      api("/odds",{fixture:id})
-    ]);
     res.json({
-      fixture: fx.status==="fulfilled" ? fx.value.response?.[0] : null,
-      prediction: pd.status==="fulfilled" ? pd.value.response?.[0] : null,
-      odds: odds.status==="fulfilled" ? odds.value.response : []
+
+      results: enriched,
+
+      count: enriched.length,
+
+      source: "API-Football"
+
     });
-  } catch(e) { res.status(500).json({error:e.message}); }
+
+  } catch (error) {
+
+    console.error(error);
+
+    res.status(500).json({
+      error: error.message
+    });
+
+  }
+
 });
 
-app.get("/api/h2h", async (req,res)=>{
+// ===============================
+// MATCH DETAILS
+// ===============================
+
+app.get("/api/match/:id", async (req, res) => {
+
   try {
-    const {home,away}=req.query;
-    if(!home||!away) return res.status(400).json({error:"home and away are required"});
-    const data=await api("/fixtures/headtohead",{h2h:`${home}-${away}`,last:10});
-    res.json(data);
-  } catch(e){res.status(500).json({error:e.message});}
+
+    const id = req.params.id;
+
+    const results =
+      await Promise.allSettled([
+
+        api("/fixtures", {
+          id
+        }),
+
+        api("/predictions", {
+          fixture: id
+        }),
+
+        api("/odds", {
+          fixture: id
+        })
+
+      ]);
+
+    res.json({
+
+      fixture:
+        results[0].status === "fulfilled"
+          ? results[0].value.response?.[0]
+          : null,
+
+      prediction:
+        results[1].status === "fulfilled"
+          ? results[1].value.response?.[0]
+          : null,
+
+      odds:
+        results[2].status === "fulfilled"
+          ? results[2].value.response || []
+          : []
+
+    });
+
+  } catch (error) {
+
+    res.status(500).json({
+      error: error.message
+    });
+
+  }
+
 });
 
-app.get("/api/standings", async (req,res)=>{
+// ===============================
+// HEAD TO HEAD
+// ===============================
+
+app.get("/api/h2h", async (req, res) => {
+
   try {
-    const data=await api("/standings",{league:req.query.league,season:req.query.season});
+
+    const {
+      home,
+      away
+    } = req.query;
+
+    if (!home || !away) {
+
+      return res.status(400).json({
+        error:
+          "home and away are required"
+      });
+
+    }
+
+    const data =
+      await api(
+        "/fixtures/headtohead",
+        {
+          h2h: `${home}-${away}`,
+          last: 10
+        }
+      );
+
     res.json(data);
-  } catch(e){res.status(500).json({error:e.message});}
+
+  } catch (error) {
+
+    res.status(500).json({
+      error: error.message
+    });
+
+  }
+
 });
 
-app.get("*", (_req,res)=>res.sendFile(path.join(__dirname,"public","index.html")));
+// ===============================
+// STANDINGS
+// ===============================
 
-app.listen(PORT, ()=>console.log(`Football Prediction Website running on http://localhost:${PORT}`));
+app.get("/api/standings", async (req, res) => {
+
+  try {
+
+    const {
+      league,
+      season
+    } = req.query;
+
+    if (!league || !season) {
+
+      return res.status(400).json({
+        error:
+          "league and season are required"
+      });
+
+    }
+
+    const data =
+      await api(
+        "/standings",
+        {
+          league,
+          season
+        }
+      );
+
+    res.json(data);
+
+  } catch (error) {
+
+    res.status(500).json({
+      error: error.message
+    });
+
+  }
+
+});
+
+// ===============================
+// FRONTEND FALLBACK
+// Express 5 compatible
+// ===============================
+
+app.use((req, res) => {
+
+  res.sendFile(
+    path.join(
+      __dirname,
+      "public",
+      "index.html"
+    )
+  );
+
+});
+
+// ===============================
+// START SERVER
+// ===============================
+
+app.listen(
+  PORT,
+  "0.0.0.0",
+  () => {
+
+    console.log(
+      `GoalPredict running on port ${PORT}`
+    );
+
+  }
+);
