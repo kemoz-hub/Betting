@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>GoalPredict — Football Analytics</title>
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand"><span class="ball">⚽</span><div><strong>GoalPredict</strong><small>Football analytics & predictions</small></div></div>
+  <nav><button class="nav active" data-view="dashboard">Dashboard</button><button class="nav" data-view="calendar">Calendar</button><button class="nav" data-view="how">How it works</button></nav>
+  <button id="refresh" class="primary">↻ Refresh</button>
+</header>
+
+<main>
+<section id="dashboard" class="view active">
+  <div class="hero">
+    <div><span class="eyebrow">LIVE FOOTBALL DATA</span><h1>Today's football predictions</h1><p>Fixtures, statistical probabilities, goal markets and match previews in one place.</p></div>
+    <div class="datebox"><label>Date</label><input id="date" type="date"></div>
+  </div>
+
+  <div class="toolbar">
+    <input id="search" placeholder="Search team or league…">
+    <select id="market"><option value="all">All markets</option><option value="1x2">1X2</option><option value="ou">Over / Under 2.5</option><option value="btts">BTTS</option></select>
+    <select id="confidence"><option value="0">Any confidence</option><option value="65">65%+</option><option value="70">70%+</option><option value="75">75%+</option></select>
+  </div>
+
+  <div class="stats">
+    <div class="stat"><span>Fixtures</span><b id="count">—</b></div>
+    <div class="stat"><span>Top pick</span><b id="topPick">—</b></div>
+    <div class="stat"><span>Highest confidence</span><b id="topConf">—</b></div>
+    <div class="stat"><span>Last update</span><b id="updated">—</b></div>
+  </div>
+
+  <div class="layout">
+    <section><div class="sectionhead"><h2>Matches</h2><span id="status">Loading…</span></div><div id="matches" class="matches"></div></section>
+    <aside><div class="panel"><h3>Top picks</h3><div id="picks"></div></div><div class="panel"><h3>Prediction markets</h3><p class="muted">Probabilities are statistical estimates, not guarantees.</p><div class="marketrow"><span>1X2</span><b>Home · Draw · Away</b></div><div class="marketrow"><span>Goals</span><b>Over / Under</b></div><div class="marketrow"><span>BTTS</span><b>Yes / No</b></div></div></aside>
+  </div>
+</section>
+
+<section id="calendar" class="view">
+  <div class="hero compact"><div><span class="eyebrow">FIXTURE CALENDAR</span><h1>Choose a match date</h1><p>Load a specific day or a short date range.</p></div><div class="datebox"><label>Date</label><input id="date2" type="date"></div></div>
+  <div class="calendarcard"><button id="loadDate" class="primary">Load fixtures</button><p id="calendarMsg">Select a date and load the fixtures.</p></div>
+</section>
+
+<section id="how" class="view">
+  <div class="info"><span class="eyebrow">METHODOLOGY</span><h1>How GoalPredict works</h1><p>The website uses API-Football as the live football-data source and displays fixture information alongside prediction data. For goal markets and scorelines, a Poisson-style statistical layer is used as a transparent baseline.</p><div class="steps"><div><b>01</b><h3>Collect</h3><p>Fixtures, teams, competition and prediction data are retrieved server-side.</p></div><div><b>02</b><h3>Estimate</h3><p>Home/draw/away, goals and BTTS probabilities are presented for each match.</p></div><div><b>03</b><h3>Display</h3><p>A responsive browser dashboard turns the data into readable match cards.</p></div></div></div>
+</section>
+</main>
+
+<div id="modal" class="modal"><div class="modalbox"><button id="close" class="close">×</button><div id="modalContent"></div></div></div>
+<script src="/app.js"></script>
+</body></html>
